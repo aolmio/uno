@@ -72,6 +72,13 @@
             }
         };
 
+        const getCardScore = (card) => {
+            if (card.type === 'Number') return parseInt(card.value, 10);
+            if (card.type === 'Action') return 20;
+            if (card.type === 'Wild') return 50;
+            return 0;
+        };
+
         const generateDeck = (mode) => {
             let deck = [];
             let id = 0;
@@ -127,7 +134,7 @@
             if (hidden) {
                 return (
                     <div className="relative w-12 sm:w-16 md:w-20 h-20 sm:h-24 md:h-32 rounded-lg border-2 border-white/20 bg-zinc-900 flex items-center justify-center shadow-lg flex-shrink-0">
-                        <div className="absolute w-3/4 h-3/4 bg-red-600 rounded-full flex items-center justify-center transform -rotate-12">
+                        <div className="absolute w-3/4 h-3/4 bg-red-600 rounded-full flex items-center justify-center transform -rotate-12 shadow-inner">
                             <span className="text-white font-black text-xs sm:text-sm md:text-xl transform rotate-12">UNO</span>
                         </div>
                     </div>
@@ -155,9 +162,12 @@
 
         // --- MAIN APP ---
         const App = () => {
+            const [menuSettings, setMenuSettings] = useState({ mode: 'NORMAL', isTeamMode: false });
+            
             const [gameState, setGameState] = useState({
                 phase: 'MENU', // MENU, PLAYING, WILD_COLOR_PICK, TARGET_PICK, GAME_OVER
                 mode: 'NORMAL',
+                isTeamMode: false,
                 deck: [],
                 discard: [],
                 hands: [[], [], [], []],
@@ -165,12 +175,18 @@
                 direction: 1,
                 activeColor: null,
                 pendingPlay: null,
-                message: 'Welcome to Uno!'
+                message: 'Welcome to Uno!',
+                globalScores: [0, 0, 0, 0],
+                roundWinner: null,
+                roundPoints: 0
             });
 
-            // Start Game
-            const startGame = (mode) => {
-                let initialDeck = generateDeck(mode);
+            // Start or Restart Game
+            const startGame = (keepScores = false) => {
+                const modeToUse = keepScores ? gameState.mode : menuSettings.mode;
+                const teamModeToUse = keepScores ? gameState.isTeamMode : menuSettings.isTeamMode;
+                
+                let initialDeck = generateDeck(modeToUse);
                 let hands = [[], [], [], []];
                 
                 // Deal 7 cards each
@@ -185,9 +201,10 @@
                 let firstCard = initialDeck.splice(firstCardIndex, 1)[0];
                 let discard = [firstCard];
 
-                setGameState({
+                setGameState(prev => ({
                     phase: 'PLAYING',
-                    mode,
+                    mode: modeToUse,
+                    isTeamMode: teamModeToUse,
                     deck: initialDeck,
                     discard,
                     hands,
@@ -195,8 +212,11 @@
                     direction: 1,
                     activeColor: firstCard.color,
                     pendingPlay: null,
-                    message: "Player 1's Turn!"
-                });
+                    message: "Game Start! Your Turn.",
+                    globalScores: keepScores ? prev.globalScores : [0, 0, 0, 0],
+                    roundWinner: null,
+                    roundPoints: 0
+                }));
             };
 
             // Unified State Updater for Plays and Draws
@@ -238,7 +258,6 @@
                         targetDrawPlayer = chosenTarget;
                         newState.message = `Player ${playerIdx + 1} targeted Player ${chosenTarget + 1} to draw 4! Color is ${chosenColor}.`;
                     } else if (card.value === 'Wild Pass Hands') {
-                        // Shift hands in the direction of play
                         let newHands = [];
                         for(let i=0; i<4; i++) {
                             let source = (i - newState.direction + 4) % 4;
@@ -255,7 +274,6 @@
                         let drawn = [];
                         for(let i=0; i<cardsToDraw; i++) {
                             if (newState.deck.length === 0) {
-                                // Reshuffle discard
                                 let newDeck = [...newState.discard];
                                 const top = newDeck.pop();
                                 newDeck.sort(() => Math.random() - 0.5);
@@ -267,10 +285,37 @@
                         newState.hands[targetDrawPlayer] = [...newState.hands[targetDrawPlayer], ...drawn];
                     }
 
-                    // Check Win Condition
+                    // Check Win Condition (Hand Empty)
                     if (newState.hands[playerIdx].length === 0) {
                         newState.phase = 'GAME_OVER';
-                        newState.message = `Player ${playerIdx + 1} WINS!`;
+                        newState.roundWinner = playerIdx;
+                        
+                        // Calculate Points
+                        let pointsGained = 0;
+                        newState.hands.forEach((hand, i) => {
+                            if (newState.isTeamMode) {
+                                // If teams, take points from opponents (not teammate)
+                                const isTeammate = (i === (playerIdx + 2) % 4) || (i === playerIdx);
+                                if (!isTeammate) {
+                                    hand.forEach(c => pointsGained += getCardScore(c));
+                                }
+                            } else {
+                                // Solo: Take points from everyone else
+                                if (i !== playerIdx) {
+                                    hand.forEach(c => pointsGained += getCardScore(c));
+                                }
+                            }
+                        });
+
+                        newState.roundPoints = pointsGained;
+                        newState.globalScores[playerIdx] += pointsGained;
+                        
+                        if (newState.isTeamMode) {
+                            const teamName = (playerIdx === 0 || playerIdx === 2) ? 'Team 1 (You & Top)' : 'Team 2 (Left & Right)';
+                            newState.message = `🏆 ${teamName} WINS THE ROUND!`;
+                        } else {
+                            newState.message = `🏆 Player ${playerIdx + 1} WINS THE ROUND!`;
+                        }
                         return newState;
                     }
 
@@ -348,8 +393,13 @@
                             if (colorCounts[color] === 0) color = COLORS[Math.floor(Math.random() * COLORS.length)];
 
                             if (card.value === 'Wild Target Draw 4') {
-                                const validTargets = [0, 1, 2, 3].filter(t => t !== aiIdx);
-                                // Target player with fewest cards
+                                // Exclude self and (if in team mode) teammate
+                                const validTargets = [0, 1, 2, 3].filter(t => {
+                                    if (t === aiIdx) return false;
+                                    if (gameState.isTeamMode && t === (aiIdx + 2) % 4) return false;
+                                    return true;
+                                });
+                                // Target valid player with fewest cards
                                 target = validTargets.reduce((a, b) => gameState.hands[a].length < gameState.hands[b].length ? a : b);
                             }
                         }
@@ -364,6 +414,18 @@
 
 
             // --- RENDERING ---
+
+            // Player Labels Helpers
+            const getPlayerLabel = (idx) => {
+                if (gameState.isTeamMode) {
+                    if (idx === 0) return "You (Team 1)";
+                    if (idx === 1) return "P2 Left (Team 2)";
+                    if (idx === 2) return "P3 Top (Team 1)";
+                    if (idx === 3) return "P4 Right (Team 2)";
+                }
+                return idx === 0 ? "You (P1)" : `Player ${idx + 1}`;
+            };
+
             if (gameState.phase === 'MENU') {
                 return (
                     <div className="h-screen w-screen flex flex-col items-center justify-center space-y-8 safe-area-wrapper bg-gradient-to-br from-emerald-900 to-zinc-900">
@@ -371,16 +433,30 @@
                             <h1 className="text-6xl md:text-8xl font-black italic tracking-tighter text-red-500 drop-shadow-lg mb-2">UNO</h1>
                             <p className="text-xl md:text-2xl font-bold text-white/80">Web Edition</p>
                         </div>
-                        <div className="flex flex-col space-y-4 w-64">
-                            <button onClick={() => startGame('NORMAL')} className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-6 rounded-xl shadow-lg transform transition hover:scale-105 border-2 border-blue-400">
-                                Normal Mode
-                            </button>
-                            <button onClick={() => startGame('EXTREME')} className="bg-red-600 hover:bg-red-500 text-white font-bold py-3 px-6 rounded-xl shadow-lg transform transition hover:scale-105 border-2 border-red-400">
-                                Extreme Variant
+                        
+                        <div className="bg-black/30 p-6 rounded-2xl border border-white/10 w-[90%] max-w-md">
+                            <div className="mb-6">
+                                <h3 className="text-sm text-white/50 uppercase tracking-widest mb-3 font-bold">Game Variant</h3>
+                                <div className="flex space-x-2">
+                                    <button onClick={() => setMenuSettings({...menuSettings, mode: 'NORMAL'})} className={`flex-1 py-3 rounded-lg font-bold transition ${menuSettings.mode === 'NORMAL' ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}>Normal</button>
+                                    <button onClick={() => setMenuSettings({...menuSettings, mode: 'EXTREME'})} className={`flex-1 py-3 rounded-lg font-bold transition ${menuSettings.mode === 'EXTREME' ? 'bg-red-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}>Extreme</button>
+                                </div>
+                            </div>
+                            <div className="mb-8">
+                                <h3 className="text-sm text-white/50 uppercase tracking-widest mb-3 font-bold">Format</h3>
+                                <div className="flex space-x-2">
+                                    <button onClick={() => setMenuSettings({...menuSettings, isTeamMode: false})} className={`flex-1 py-3 rounded-lg font-bold transition ${!menuSettings.isTeamMode ? 'bg-yellow-500 text-black' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}>Free-For-All</button>
+                                    <button onClick={() => setMenuSettings({...menuSettings, isTeamMode: true})} className={`flex-1 py-3 rounded-lg font-bold transition ${menuSettings.isTeamMode ? 'bg-purple-500 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}>2 vs 2 Teams</button>
+                                </div>
+                            </div>
+
+                            <button onClick={() => startGame(false)} className="w-full bg-emerald-500 hover:bg-emerald-400 text-black font-black py-4 rounded-xl shadow-lg transform transition hover:scale-[1.02] active:scale-95 text-xl">
+                                START GAME
                             </button>
                         </div>
+                        
                         <p className="text-sm text-center max-w-xs text-white/60">
-                            Extreme includes "Wild Pass Hands" & "Target Draw 4"
+                            {menuSettings.mode === 'EXTREME' ? "Extreme includes 'Wild Pass Hands' & 'Target Draw 4'" : "Classic Uno Rules. 500 Points to Win."}
                         </p>
                     </div>
                 );
@@ -392,32 +468,32 @@
                 <div className="h-screen w-screen flex flex-col justify-between safe-area-wrapper overflow-hidden bg-gradient-to-br from-emerald-800 to-emerald-950 font-sans">
                     
                     {/* Top Player (Player 2) */}
-                    <div className="flex justify-center items-start h-[20%] pt-2">
+                    <div className="flex justify-center items-start h-[20%] pt-2 relative z-10">
                         <div className="flex space-x-[-1.5rem] sm:space-x-[-2rem] scale-75 sm:scale-90 opacity-90">
                             {gameState.hands[2].map((c, i) => <Card key={i} card={c} hidden={true} />)}
                         </div>
-                        <div className={`absolute top-2 left-4 text-xs font-bold px-3 py-1 rounded-full ${gameState.turn === 2 ? 'bg-yellow-400 text-black shadow-[0_0_15px_rgba(250,204,21,1)]' : 'bg-black/40 text-white/50'}`}>
-                            Player 3 (Top AI) - {gameState.hands[2].length}
+                        <div className={`absolute top-2 left-4 text-xs font-bold px-3 py-1 rounded-full border ${gameState.turn === 2 ? 'bg-yellow-400 text-black shadow-[0_0_15px_rgba(250,204,21,1)] border-yellow-300' : 'bg-black/40 text-white/50 border-white/10'}`}>
+                            {getPlayerLabel(2)} - {gameState.hands[2].length}
                         </div>
                     </div>
 
                     {/* Middle Section */}
-                    <div className="flex justify-between items-center h-[50%] px-2 sm:px-8">
+                    <div className="flex justify-between items-center h-[50%] px-2 sm:px-8 relative z-0">
                         
                         {/* Left Player (Player 1) */}
-                        <div className="w-[20%] flex flex-col justify-center items-start">
+                        <div className="w-[20%] flex flex-col justify-center items-start relative">
                             <div className="flex flex-col space-y-[-2rem] sm:space-y-[-3rem] scale-75 sm:scale-90 opacity-90 ml-2">
                                 {gameState.hands[1].map((c, i) => <Card key={i} card={c} hidden={true} />)}
                             </div>
-                            <div className={`absolute left-4 top-1/2 -translate-y-1/2 text-xs font-bold px-3 py-1 rounded-full whitespace-nowrap rotate-90 transform origin-left translate-x-4 ${gameState.turn === 1 ? 'bg-yellow-400 text-black shadow-[0_0_15px_rgba(250,204,21,1)]' : 'bg-black/40 text-white/50'}`}>
-                                P2 (Left AI) - {gameState.hands[1].length}
+                            <div className={`absolute left-0 sm:left-4 top-1/2 -translate-y-1/2 text-xs font-bold px-3 py-1 rounded-full border whitespace-nowrap rotate-90 transform origin-left translate-x-8 sm:translate-x-12 ${gameState.turn === 1 ? 'bg-yellow-400 text-black shadow-[0_0_15px_rgba(250,204,21,1)] border-yellow-300' : 'bg-black/40 text-white/50 border-white/10'}`}>
+                                {getPlayerLabel(1)} - {gameState.hands[1].length}
                             </div>
                         </div>
 
                         {/* Table Area */}
                         <div className="w-[60%] flex flex-col items-center justify-center relative">
                             {/* Direction Indicator */}
-                            <div className="absolute top-0 flex items-center justify-center space-x-2 text-white/30 text-sm font-bold tracking-widest">
+                            <div className="absolute top-0 flex items-center justify-center space-x-2 text-white/30 text-xs sm:text-sm font-bold tracking-widest">
                                 <span>{gameState.direction === 1 ? '↻ CLOCKWISE' : '↺ COUNTER-CLOCKWISE'}</span>
                             </div>
 
@@ -441,25 +517,25 @@
                             </div>
                             
                             {/* Message Log */}
-                            <div className="absolute -bottom-12 w-full text-center text-sm sm:text-base font-bold text-white drop-shadow-md bg-black/30 py-1 px-4 rounded-full">
+                            <div className="absolute -bottom-16 w-max max-w-[120%] text-center text-xs sm:text-base font-bold text-white drop-shadow-md bg-black/50 py-2 px-6 rounded-full whitespace-nowrap overflow-hidden text-ellipsis border border-white/10">
                                 {gameState.message}
                             </div>
                         </div>
 
                         {/* Right Player (Player 3) */}
-                        <div className="w-[20%] flex flex-col justify-center items-end">
+                        <div className="w-[20%] flex flex-col justify-center items-end relative">
                             <div className="flex flex-col space-y-[-2rem] sm:space-y-[-3rem] scale-75 sm:scale-90 opacity-90 mr-2">
                                 {gameState.hands[3].map((c, i) => <Card key={i} card={c} hidden={true} />)}
                             </div>
-                            <div className={`absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold px-3 py-1 rounded-full whitespace-nowrap -rotate-90 transform origin-right -translate-x-4 ${gameState.turn === 3 ? 'bg-yellow-400 text-black shadow-[0_0_15px_rgba(250,204,21,1)]' : 'bg-black/40 text-white/50'}`}>
-                                P4 (Right AI) - {gameState.hands[3].length}
+                            <div className={`absolute right-0 sm:right-4 top-1/2 -translate-y-1/2 text-xs font-bold px-3 py-1 rounded-full border whitespace-nowrap -rotate-90 transform origin-right -translate-x-8 sm:-translate-x-12 ${gameState.turn === 3 ? 'bg-yellow-400 text-black shadow-[0_0_15px_rgba(250,204,21,1)] border-yellow-300' : 'bg-black/40 text-white/50 border-white/10'}`}>
+                                {getPlayerLabel(3)} - {gameState.hands[3].length}
                             </div>
                         </div>
                     </div>
 
                     {/* Bottom Player (Human - Player 0) */}
                     <div className="flex flex-col items-center justify-end h-[30%] pb-4 relative z-20">
-                        <div className={`mb-2 text-sm font-bold px-4 py-1 rounded-full transition-all duration-300 ${gameState.turn === 0 ? 'bg-yellow-400 text-black shadow-[0_0_20px_rgba(250,204,21,1)] scale-110' : 'bg-black/50 text-white/50'}`}>
+                        <div className={`mb-2 text-sm font-bold px-6 py-1 rounded-full border transition-all duration-300 ${gameState.turn === 0 ? 'bg-yellow-400 text-black shadow-[0_0_20px_rgba(250,204,21,1)] scale-110 border-yellow-300' : 'bg-black/50 text-white/50 border-white/10'}`}>
                             {gameState.turn === 0 ? 'YOUR TURN' : 'Waiting...'}
                         </div>
                         <div className="flex flex-wrap justify-center max-w-4xl px-4 gap-[-1rem] sm:gap-[-1.5rem] no-scrollbar overflow-x-visible items-end">
@@ -510,34 +586,81 @@
                             <div className="bg-zinc-800 p-6 rounded-2xl shadow-2xl border border-white/10 text-center w-full max-w-sm">
                                 <h2 className="text-2xl font-bold mb-6 text-red-400">Select Target to Draw 4</h2>
                                 <div className="flex flex-col space-y-3">
-                                    {[1, 2, 3].map(t => (
-                                        <button 
-                                            key={t} 
-                                            className="bg-zinc-700 hover:bg-zinc-600 text-white font-bold py-4 px-6 rounded-xl shadow border border-white/10"
-                                            onClick={() => {
-                                                const { cardIdx, color } = gameState.pendingPlay;
-                                                processPlay(0, cardIdx, color || gameState.activeColor, t);
-                                            }}
-                                        >
-                                            Player {t + 1} ({t === 1 ? 'Left' : t === 2 ? 'Top' : 'Right'})
-                                        </button>
-                                    ))}
+                                    {[1, 2, 3].map(t => {
+                                        const isTeammate = gameState.isTeamMode && t === 2;
+                                        if (isTeammate) return null; // Can't target teammate
+                                        return (
+                                            <button 
+                                                key={t} 
+                                                className="bg-zinc-700 hover:bg-zinc-600 text-white font-bold py-4 px-6 rounded-xl shadow border border-white/10 flex justify-between"
+                                                onClick={() => {
+                                                    const { cardIdx, color } = gameState.pendingPlay;
+                                                    processPlay(0, cardIdx, color || gameState.activeColor, t);
+                                                }}
+                                            >
+                                                <span>{getPlayerLabel(t)}</span>
+                                                <span>🎯</span>
+                                            </button>
+                                        )
+                                    })}
                                 </div>
                             </div>
                         </div>
                     )}
 
+                    {/* GAME OVER / LEADERBOARD MODAL */}
                     {gameState.phase === 'GAME_OVER' && (
-                        <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center z-50 p-4 space-y-6">
-                            <h1 className="text-5xl sm:text-7xl font-black text-yellow-400 drop-shadow-[0_0_30px_rgba(250,204,21,0.5)] text-center">
-                                {gameState.message}
-                            </h1>
-                            <button 
-                                onClick={() => setGameState(prev => ({ ...prev, phase: 'MENU' }))} 
-                                className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 px-10 rounded-full shadow-lg transform transition hover:scale-105 border-2 border-blue-400 text-xl"
-                            >
-                                Back to Menu
-                            </button>
+                        <div className="absolute inset-0 bg-black/95 flex flex-col items-center justify-center z-50 p-4 overflow-y-auto">
+                            <div className="w-full max-w-md bg-zinc-900 border border-white/20 rounded-3xl p-6 shadow-2xl mt-8">
+                                <h1 className="text-3xl font-black text-yellow-400 drop-shadow-md text-center mb-2">ROUND OVER</h1>
+                                <p className="text-center text-white/80 font-bold mb-6">{gameState.message} (+{gameState.roundPoints} Pts)</p>
+                                
+                                <div className="bg-black/50 rounded-xl p-4 mb-8">
+                                    <h2 className="text-xl font-bold mb-4 border-b border-white/10 pb-2 text-center text-emerald-400">Match Leaderboard</h2>
+                                    
+                                    {gameState.isTeamMode ? (
+                                        <div className="space-y-4">
+                                            <div className="flex justify-between items-center p-3 rounded bg-zinc-800 border border-white/5">
+                                                <span className="font-bold">Team 1 (You & Top)</span>
+                                                <span className="text-2xl font-black text-yellow-400">{gameState.globalScores[0] + gameState.globalScores[2]}</span>
+                                            </div>
+                                            <div className="flex justify-between items-center p-3 rounded bg-zinc-800 border border-white/5">
+                                                <span className="font-bold">Team 2 (Left & Right)</span>
+                                                <span className="text-2xl font-black text-yellow-400">{gameState.globalScores[1] + gameState.globalScores[3]}</span>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            {[0, 1, 2, 3]
+                                                .sort((a, b) => gameState.globalScores[b] - gameState.globalScores[a])
+                                                .map((p, idx) => (
+                                                <div key={p} className={`flex justify-between items-center p-3 rounded border ${p === 0 ? 'bg-emerald-900/40 border-emerald-500/30' : 'bg-zinc-800 border-white/5'}`}>
+                                                    <span className="font-bold flex items-center space-x-2">
+                                                        <span className="text-white/50 w-4">{idx + 1}.</span> 
+                                                        <span>{getPlayerLabel(p)}</span>
+                                                    </span>
+                                                    <span className="text-xl font-black text-yellow-400">{gameState.globalScores[p]}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="flex flex-col space-y-3">
+                                    <button 
+                                        onClick={() => startGame(true)} 
+                                        className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-xl shadow-lg transition active:scale-95 text-lg"
+                                    >
+                                        Play Next Round
+                                    </button>
+                                    <button 
+                                        onClick={() => setGameState(prev => ({ ...prev, phase: 'MENU' }))} 
+                                        className="w-full bg-zinc-800 hover:bg-zinc-700 text-white/70 font-bold py-3 rounded-xl transition active:scale-95"
+                                    >
+                                        End Match (Back to Menu)
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>
