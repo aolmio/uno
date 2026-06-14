@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Extreme Uno - 4 Player</title>
+    
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <style>
+        /* Mobile Safe Area Padding */
+        .safe-area-wrapper {
+            padding-top: env(safe-area-inset-top, 0px);
+            padding-right: env(safe-area-inset-right, 0px);
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+            padding-left: env(safe-area-inset-left, 0px);
+        }
+
+        /* Custom Scrollbar hide */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        /* Animations */
+        @keyframes deal {
+            0% { transform: scale(0) translateY(-50px); opacity: 0; }
+            100% { transform: scale(1) translateY(0); opacity: 1; }
+        }
+        .animate-deal {
+            animation: deal 0.3s ease-out forwards;
+        }
+    </style>
+</head>
+<body class="bg-emerald-900 text-white overflow-hidden select-none">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+
+        // --- CONSTANTS & HELPERS ---
+        const COLORS = ['Red', 'Yellow', 'Green', 'Blue'];
+        const VALUES = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'Skip', 'Reverse', 'Draw 2'];
+        const WILD_TYPES = ['Wild', 'Wild Draw 4'];
+        const EXTREME_WILDS = ['Wild Target Draw 4', 'Wild Pass Hands'];
+
+        const BG_COLORS = {
+            Red: 'bg-red-500', Yellow: 'bg-yellow-400', Green: 'bg-green-500', Blue: 'bg-blue-500', Wild: 'bg-zinc-800'
+        };
+        const TEXT_COLORS = {
+            Red: 'text-red-500', Yellow: 'text-yellow-400', Green: 'text-green-500', Blue: 'text-blue-500', Wild: 'text-zinc-800'
+        };
+
+        const getCardDisplay = (value) => {
+            switch(value) {
+                case 'Skip': return '⊘';
+                case 'Reverse': return '⇄';
+                case 'Draw 2': return '+2';
+                case 'Wild': return 'W';
+                case 'Wild Draw 4': return '+4';
+                case 'Wild Target Draw 4': return '🎯+4';
+                case 'Wild Pass Hands': return '🌪️';
+                default: return value;
+            }
+        };
+
+        const generateDeck = (mode) => {
+            let deck = [];
+            let id = 0;
+            
+            COLORS.forEach(color => {
+                deck.push({ id: id++, color, type: 'Number', value: '0' });
+                for (let i = 1; i <= 9; i++) {
+                    deck.push({ id: id++, color, type: 'Number', value: i.toString() });
+                    deck.push({ id: id++, color, type: 'Number', value: i.toString() });
+                }
+                ['Skip', 'Reverse', 'Draw 2'].forEach(action => {
+                    deck.push({ id: id++, color, type: 'Action', value: action });
+                    deck.push({ id: id++, color, type: 'Action', value: action });
+                });
+            });
+
+            for (let i = 0; i < 4; i++) {
+                deck.push({ id: id++, color: 'Wild', type: 'Wild', value: 'Wild' });
+                deck.push({ id: id++, color: 'Wild', type: 'Wild', value: 'Wild Draw 4' });
+            }
+
+            if (mode === 'EXTREME') {
+                for (let i = 0; i < 4; i++) {
+                    deck.push({ id: id++, color: 'Wild', type: 'Wild', value: 'Wild Target Draw 4' });
+                    deck.push({ id: id++, color: 'Wild', type: 'Wild', value: 'Wild Pass Hands' });
+                }
+            }
+
+            // Fisher-Yates Shuffle
+            for (let i = deck.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [deck[i], deck[j]] = [deck[j], deck[i]];
+            }
+            return deck;
+        };
+
+        const isPlayValid = (card, topCard, activeColor) => {
+            if (card.color === 'Wild') return true;
+            if (card.color === activeColor) return true;
+            if (card.value === topCard.value) return true;
+            return false;
+        };
+
+        const getNextTurn = (current, dir, skip = false) => {
+            let steps = skip ? 2 : 1;
+            let next = (current + (dir * steps)) % 4;
+            if (next < 0) next += 4;
+            return next;
+        };
+
+        // --- COMPONENTS ---
+        const Card = ({ card, hidden, playable, onClick }) => {
+            if (hidden) {
+                return (
+                    <div className="relative w-12 sm:w-16 md:w-20 h-20 sm:h-24 md:h-32 rounded-lg border-2 border-white/20 bg-zinc-900 flex items-center justify-center shadow-lg flex-shrink-0">
+                        <div className="absolute w-3/4 h-3/4 bg-red-600 rounded-full flex items-center justify-center transform -rotate-12">
+                            <span className="text-white font-black text-xs sm:text-sm md:text-xl transform rotate-12">UNO</span>
+                        </div>
+                    </div>
+                );
+            }
+
+            const display = getCardDisplay(card.value);
+            const isWild = card.color === 'Wild';
+
+            return (
+                <div 
+                    onClick={playable ? onClick : undefined}
+                    className={`relative w-12 sm:w-16 md:w-20 h-20 sm:h-24 md:h-32 rounded-lg border-2 border-white flex flex-shrink-0 items-center justify-center shadow-lg transition-all duration-300 ${BG_COLORS[card.color]} ${playable ? 'cursor-pointer hover:-translate-y-4 hover:shadow-2xl opacity-100 z-10' : 'opacity-70 grayscale-[30%]'} animate-deal`}
+                >
+                    <div className={`absolute w-3/4 h-3/4 bg-white rounded-full flex items-center justify-center shadow-inner ${isWild ? '' : 'transform -rotate-12'}`}>
+                        <span className={`text-xl sm:text-3xl md:text-4xl font-black ${TEXT_COLORS[card.color]} drop-shadow-sm ${isWild ? '' : 'transform rotate-12'} text-center leading-none`}>
+                            {display}
+                        </span>
+                    </div>
+                    <span className="absolute top-1 left-1 text-white text-[10px] sm:text-xs font-bold leading-none">{display}</span>
+                    <span className="absolute bottom-1 right-1 text-white text-[10px] sm:text-xs font-bold leading-none rotate-180">{display}</span>
+                </div>
+            );
+        };
+
+        // --- MAIN APP ---
+        const App = () => {
+            const [gameState, setGameState] = useState({
+                phase: 'MENU', // MENU, PLAYING, WILD_COLOR_PICK, TARGET_PICK, GAME_OVER
+                mode: 'NORMAL',
+                deck: [],
+                discard: [],
+                hands: [[], [], [], []],
+                turn: 0,
+                direction: 1,
+                activeColor: null,
+                pendingPlay: null,
+                message: 'Welcome to Uno!'
+            });
+
+            // Start Game
+            const startGame = (mode) => {
+                let initialDeck = generateDeck(mode);
+                let hands = [[], [], [], []];
+                
+                // Deal 7 cards each
+                for (let i = 0; i < 7; i++) {
+                    for (let p = 0; p < 4; p++) {
+                        hands[p].push(initialDeck.pop());
+                    }
+                }
+
+                // Initial discard (ensure it's a Number card for simplicity)
+                let firstCardIndex = initialDeck.findIndex(c => c.type === 'Number');
+                let firstCard = initialDeck.splice(firstCardIndex, 1)[0];
+                let discard = [firstCard];
+
+                setGameState({
+                    phase: 'PLAYING',
+                    mode,
+                    deck: initialDeck,
+                    discard,
+                    hands,
+                    turn: 0,
+                    direction: 1,
+                    activeColor: firstCard.color,
+                    pendingPlay: null,
+                    message: "Player 1's Turn!"
+                });
+            };
+
+            // Unified State Updater for Plays and Draws
+            const processPlay = (playerIdx, cardIdx, chosenColor = null, chosenTarget = null) => {
+                setGameState(prev => {
+                    const newState = { ...prev };
+                    const card = prev.hands[playerIdx][cardIdx];
+                    
+                    // Remove card from hand
+                    newState.hands = prev.hands.map((h, i) => i === playerIdx ? h.filter((_, idx) => idx !== cardIdx) : h);
+                    newState.discard = [...prev.discard, card];
+                    newState.activeColor = card.color !== 'Wild' ? card.color : chosenColor;
+
+                    let skipNext = false;
+                    let cardsToDraw = 0;
+                    let targetDrawPlayer = null;
+
+                    // Evaluate Effects
+                    if (card.value === 'Skip') {
+                        skipNext = true;
+                        newState.message = `Player ${playerIdx + 1} played Skip!`;
+                    } else if (card.value === 'Reverse') {
+                        newState.direction = prev.direction * -1;
+                        newState.message = `Direction Reversed!`;
+                    } else if (card.value === 'Draw 2') {
+                        skipNext = true;
+                        cardsToDraw = 2;
+                        targetDrawPlayer = getNextTurn(playerIdx, newState.direction, false);
+                        newState.message = `Player ${targetDrawPlayer + 1} draws 2!`;
+                    } else if (card.value === 'Wild') {
+                        newState.message = `Color changed to ${chosenColor}`;
+                    } else if (card.value === 'Wild Draw 4') {
+                        skipNext = true;
+                        cardsToDraw = 4;
+                        targetDrawPlayer = getNextTurn(playerIdx, newState.direction, false);
+                        newState.message = `Color changed to ${chosenColor}. Player ${targetDrawPlayer + 1} draws 4!`;
+                    } else if (card.value === 'Wild Target Draw 4') {
+                        cardsToDraw = 4;
+                        targetDrawPlayer = chosenTarget;
+                        newState.message = `Player ${playerIdx + 1} targeted Player ${chosenTarget + 1} to draw 4! Color is ${chosenColor}.`;
+                    } else if (card.value === 'Wild Pass Hands') {
+                        // Shift hands in the direction of play
+                        let newHands = [];
+                        for(let i=0; i<4; i++) {
+                            let source = (i - newState.direction + 4) % 4;
+                            newHands[i] = newState.hands[source];
+                        }
+                        newState.hands = newHands;
+                        newState.message = `🌪️ Hands Passed! Color changed to ${chosenColor}.`;
+                    } else {
+                        newState.message = `Player ${playerIdx + 1} played ${card.color} ${card.value}`;
+                    }
+
+                    // Process Forced Draws
+                    if (cardsToDraw > 0 && targetDrawPlayer !== null) {
+                        let drawn = [];
+                        for(let i=0; i<cardsToDraw; i++) {
+                            if (newState.deck.length === 0) {
+                                // Reshuffle discard
+                                let newDeck = [...newState.discard];
+                                const top = newDeck.pop();
+                                newDeck.sort(() => Math.random() - 0.5);
+                                newState.deck = newDeck;
+                                newState.discard = [top];
+                            }
+                            drawn.push(newState.deck.pop());
+                        }
+                        newState.hands[targetDrawPlayer] = [...newState.hands[targetDrawPlayer], ...drawn];
+                    }
+
+                    // Check Win Condition
+                    if (newState.hands[playerIdx].length === 0) {
+                        newState.phase = 'GAME_OVER';
+                        newState.message = `Player ${playerIdx + 1} WINS!`;
+                        return newState;
+                    }
+
+                    // Advance Turn
+                    newState.turn = getNextTurn(playerIdx, newState.direction, skipNext);
+                    newState.phase = 'PLAYING';
+                    
+                    return newState;
+                });
+            };
+
+            const handleDraw = (playerIdx) => {
+                setGameState(prev => {
+                    const newState = { ...prev };
+                    let drawnCard = null;
+                    
+                    if (newState.deck.length === 0) {
+                        let newDeck = [...newState.discard];
+                        const top = newDeck.pop();
+                        newDeck.sort(() => Math.random() - 0.5);
+                        newState.deck = newDeck;
+                        newState.discard = [top];
+                    }
+                    
+                    drawnCard = newState.deck.pop();
+                    newState.hands[playerIdx] = [...newState.hands[playerIdx], drawnCard];
+                    newState.message = `Player ${playerIdx + 1} drew a card.`;
+                    newState.turn = getNextTurn(playerIdx, newState.direction, false);
+                    return newState;
+                });
+            };
+
+            // Human Interactions
+            const onHumanPlay = (cardIdx) => {
+                if (gameState.turn !== 0 || gameState.phase !== 'PLAYING') return;
+                
+                const card = gameState.hands[0][cardIdx];
+                const topCard = gameState.discard[gameState.discard.length - 1];
+
+                if (!isPlayValid(card, topCard, gameState.activeColor)) return;
+
+                if (card.color === 'Wild') {
+                    setGameState(prev => ({ ...prev, phase: card.value === 'Wild Target Draw 4' ? 'TARGET_PICK' : 'WILD_COLOR_PICK', pendingPlay: { playerIdx: 0, cardIdx } }));
+                } else {
+                    processPlay(0, cardIdx);
+                }
+            };
+
+            const onHumanDraw = () => {
+                if (gameState.turn !== 0 || gameState.phase !== 'PLAYING') return;
+                handleDraw(0);
+            };
+
+            // AI Logic
+            useEffect(() => {
+                if (gameState.phase !== 'PLAYING' || gameState.turn === 0) return;
+
+                const timer = setTimeout(() => {
+                    const aiIdx = gameState.turn;
+                    const hand = gameState.hands[aiIdx];
+                    const topCard = gameState.discard[gameState.discard.length - 1];
+
+                    const playableIdx = hand.findIndex(c => isPlayValid(c, topCard, gameState.activeColor));
+
+                    if (playableIdx !== -1) {
+                        const card = hand[playableIdx];
+                        let color = null;
+                        let target = null;
+
+                        if (card.color === 'Wild') {
+                            // AI picks its most common color
+                            const colorCounts = { Red: 0, Yellow: 0, Green: 0, Blue: 0 };
+                            hand.forEach(c => { if (c.color !== 'Wild') colorCounts[c.color]++; });
+                            color = Object.keys(colorCounts).reduce((a, b) => colorCounts[a] > colorCounts[b] ? a : b);
+                            if (colorCounts[color] === 0) color = COLORS[Math.floor(Math.random() * COLORS.length)];
+
+                            if (card.value === 'Wild Target Draw 4') {
+                                const validTargets = [0, 1, 2, 3].filter(t => t !== aiIdx);
+                                // Target player with fewest cards
+                                target = validTargets.reduce((a, b) => gameState.hands[a].length < gameState.hands[b].length ? a : b);
+                            }
+                        }
+                        processPlay(aiIdx, playableIdx, color, target);
+                    } else {
+                        handleDraw(aiIdx);
+                    }
+                }, 1200);
+
+                return () => clearTimeout(timer);
+            }, [gameState.turn, gameState.phase, gameState.hands, gameState.discard, gameState.activeColor]);
+
+
+            // --- RENDERING ---
+            if (gameState.phase === 'MENU') {
+                return (
+                    <div className="h-screen w-screen flex flex-col items-center justify-center space-y-8 safe-area-wrapper bg-gradient-to-br from-emerald-900 to-zinc-900">
+                        <div className="text-center">
+                            <h1 className="text-6xl md:text-8xl font-black italic tracking-tighter text-red-500 drop-shadow-lg mb-2">UNO</h1>
+                            <p className="text-xl md:text-2xl font-bold text-white/80">Web Edition</p>
+                        </div>
+                        <div className="flex flex-col space-y-4 w-64">
+                            <button onClick={() => startGame('NORMAL')} className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-6 rounded-xl shadow-lg transform transition hover:scale-105 border-2 border-blue-400">
+                                Normal Mode
+                            </button>
+                            <button onClick={() => startGame('EXTREME')} className="bg-red-600 hover:bg-red-500 text-white font-bold py-3 px-6 rounded-xl shadow-lg transform transition hover:scale-105 border-2 border-red-400">
+                                Extreme Variant
+                            </button>
+                        </div>
+                        <p className="text-sm text-center max-w-xs text-white/60">
+                            Extreme includes "Wild Pass Hands" & "Target Draw 4"
+                        </p>
+                    </div>
+                );
+            }
+
+            const topCard = gameState.discard[gameState.discard.length - 1];
+
+            return (
+                <div className="h-screen w-screen flex flex-col justify-between safe-area-wrapper overflow-hidden bg-gradient-to-br from-emerald-800 to-emerald-950 font-sans">
+                    
+                    {/* Top Player (Player 2) */}
+                    <div className="flex justify-center items-start h-[20%] pt-2">
+                        <div className="flex space-x-[-1.5rem] sm:space-x-[-2rem] scale-75 sm:scale-90 opacity-90">
+                            {gameState.hands[2].map((c, i) => <Card key={i} card={c} hidden={true} />)}
+                        </div>
+                        <div className={`absolute top-2 left-4 text-xs font-bold px-3 py-1 rounded-full ${gameState.turn === 2 ? 'bg-yellow-400 text-black shadow-[0_0_15px_rgba(250,204,21,1)]' : 'bg-black/40 text-white/50'}`}>
+                            Player 3 (Top AI) - {gameState.hands[2].length}
+                        </div>
+                    </div>
+
+                    {/* Middle Section */}
+                    <div className="flex justify-between items-center h-[50%] px-2 sm:px-8">
+                        
+                        {/* Left Player (Player 1) */}
+                        <div className="w-[20%] flex flex-col justify-center items-start">
+                            <div className="flex flex-col space-y-[-2rem] sm:space-y-[-3rem] scale-75 sm:scale-90 opacity-90 ml-2">
+                                {gameState.hands[1].map((c, i) => <Card key={i} card={c} hidden={true} />)}
+                            </div>
+                            <div className={`absolute left-4 top-1/2 -translate-y-1/2 text-xs font-bold px-3 py-1 rounded-full whitespace-nowrap rotate-90 transform origin-left translate-x-4 ${gameState.turn === 1 ? 'bg-yellow-400 text-black shadow-[0_0_15px_rgba(250,204,21,1)]' : 'bg-black/40 text-white/50'}`}>
+                                P2 (Left AI) - {gameState.hands[1].length}
+                            </div>
+                        </div>
+
+                        {/* Table Area */}
+                        <div className="w-[60%] flex flex-col items-center justify-center relative">
+                            {/* Direction Indicator */}
+                            <div className="absolute top-0 flex items-center justify-center space-x-2 text-white/30 text-sm font-bold tracking-widest">
+                                <span>{gameState.direction === 1 ? '↻ CLOCKWISE' : '↺ COUNTER-CLOCKWISE'}</span>
+                            </div>
+
+                            <div className="flex space-x-4 sm:space-x-12 mt-6">
+                                {/* Draw Pile */}
+                                <div className="relative cursor-pointer hover:scale-105 transition" onClick={onHumanDraw}>
+                                    <div className="absolute inset-0 bg-black/20 rounded-lg transform translate-x-2 translate-y-2"></div>
+                                    <Card card={{}} hidden={true} />
+                                    <div className="absolute -bottom-6 w-full text-center text-xs font-bold text-white/50">{gameState.deck.length} Left</div>
+                                </div>
+                                
+                                {/* Discard Pile */}
+                                <div className="relative">
+                                    {/* Active Color Glow Ring */}
+                                    <div className={`absolute -inset-4 rounded-xl opacity-30 blur-xl ${BG_COLORS[gameState.activeColor]} transition-colors duration-500`}></div>
+                                    <Card card={topCard} hidden={false} playable={false} />
+                                    <div className={`absolute -bottom-8 w-full text-center text-sm font-black px-2 py-1 rounded-full shadow-lg border border-white/20 ${BG_COLORS[gameState.activeColor]}`}>
+                                        {gameState.activeColor}
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            {/* Message Log */}
+                            <div className="absolute -bottom-12 w-full text-center text-sm sm:text-base font-bold text-white drop-shadow-md bg-black/30 py-1 px-4 rounded-full">
+                                {gameState.message}
+                            </div>
+                        </div>
+
+                        {/* Right Player (Player 3) */}
+                        <div className="w-[20%] flex flex-col justify-center items-end">
+                            <div className="flex flex-col space-y-[-2rem] sm:space-y-[-3rem] scale-75 sm:scale-90 opacity-90 mr-2">
+                                {gameState.hands[3].map((c, i) => <Card key={i} card={c} hidden={true} />)}
+                            </div>
+                            <div className={`absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold px-3 py-1 rounded-full whitespace-nowrap -rotate-90 transform origin-right -translate-x-4 ${gameState.turn === 3 ? 'bg-yellow-400 text-black shadow-[0_0_15px_rgba(250,204,21,1)]' : 'bg-black/40 text-white/50'}`}>
+                                P4 (Right AI) - {gameState.hands[3].length}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Bottom Player (Human - Player 0) */}
+                    <div className="flex flex-col items-center justify-end h-[30%] pb-4 relative z-20">
+                        <div className={`mb-2 text-sm font-bold px-4 py-1 rounded-full transition-all duration-300 ${gameState.turn === 0 ? 'bg-yellow-400 text-black shadow-[0_0_20px_rgba(250,204,21,1)] scale-110' : 'bg-black/50 text-white/50'}`}>
+                            {gameState.turn === 0 ? 'YOUR TURN' : 'Waiting...'}
+                        </div>
+                        <div className="flex flex-wrap justify-center max-w-4xl px-4 gap-[-1rem] sm:gap-[-1.5rem] no-scrollbar overflow-x-visible items-end">
+                            {gameState.hands[0].map((c, i) => {
+                                const playable = gameState.turn === 0 && gameState.phase === 'PLAYING' && isPlayValid(c, topCard, gameState.activeColor);
+                                return (
+                                    <div key={i} className="transition-transform duration-200" style={{ marginLeft: i !== 0 ? '-1.5rem' : '0' }}>
+                                        <Card 
+                                            card={c} 
+                                            hidden={false} 
+                                            playable={playable} 
+                                            onClick={() => onHumanPlay(i)} 
+                                        />
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* MODALS */}
+                    {gameState.phase === 'WILD_COLOR_PICK' && (
+                        <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                            <div className="bg-zinc-800 p-6 rounded-2xl shadow-2xl border border-white/10 text-center w-full max-w-sm">
+                                <h2 className="text-2xl font-bold mb-6">Choose Color</h2>
+                                <div className="grid grid-cols-2 gap-4">
+                                    {COLORS.map(c => (
+                                        <button 
+                                            key={c} 
+                                            className={`${BG_COLORS[c]} h-24 rounded-xl shadow-lg border-2 border-white/20 hover:scale-105 active:scale-95 transition`}
+                                            onClick={() => {
+                                                const { cardIdx } = gameState.pendingPlay;
+                                                const card = gameState.hands[0][cardIdx];
+                                                if (card.value === 'Wild Target Draw 4') {
+                                                    setGameState(prev => ({ ...prev, phase: 'TARGET_PICK', pendingPlay: { ...prev.pendingPlay, color: c }}));
+                                                } else {
+                                                    processPlay(0, cardIdx, c);
+                                                }
+                                            }}
+                                        ></button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {gameState.phase === 'TARGET_PICK' && (
+                        <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                            <div className="bg-zinc-800 p-6 rounded-2xl shadow-2xl border border-white/10 text-center w-full max-w-sm">
+                                <h2 className="text-2xl font-bold mb-6 text-red-400">Select Target to Draw 4</h2>
+                                <div className="flex flex-col space-y-3">
+                                    {[1, 2, 3].map(t => (
+                                        <button 
+                                            key={t} 
+                                            className="bg-zinc-700 hover:bg-zinc-600 text-white font-bold py-4 px-6 rounded-xl shadow border border-white/10"
+                                            onClick={() => {
+                                                const { cardIdx, color } = gameState.pendingPlay;
+                                                processPlay(0, cardIdx, color || gameState.activeColor, t);
+                                            }}
+                                        >
+                                            Player {t + 1} ({t === 1 ? 'Left' : t === 2 ? 'Top' : 'Right'})
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {gameState.phase === 'GAME_OVER' && (
+                        <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center z-50 p-4 space-y-6">
+                            <h1 className="text-5xl sm:text-7xl font-black text-yellow-400 drop-shadow-[0_0_30px_rgba(250,204,21,0.5)] text-center">
+                                {gameState.message}
+                            </h1>
+                            <button 
+                                onClick={() => setGameState(prev => ({ ...prev, phase: 'MENU' }))} 
+                                className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 px-10 rounded-full shadow-lg transform transition hover:scale-105 border-2 border-blue-400 text-xl"
+                            >
+                                Back to Menu
+                            </button>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
