@@ -5,11 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Extreme Uno - 4 Player</title>
     
+    <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     
+    <!-- Babel for in-browser JSX compilation -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
     <style>
@@ -147,7 +150,7 @@
             return (
                 <div 
                     onClick={playable ? onClick : undefined}
-                    className={`relative w-12 sm:w-16 md:w-20 h-20 sm:h-24 md:h-32 rounded-lg border-2 border-white flex flex-shrink-0 items-center justify-center shadow-lg transition-all duration-300 ${BG_COLORS[card.color]} ${playable ? 'cursor-pointer hover:-translate-y-4 hover:shadow-2xl opacity-100 z-10' : 'opacity-70 grayscale-[30%]'} animate-deal`}
+                    className={`relative w-12 sm:w-16 md:w-20 h-20 sm:h-24 md:h-32 rounded-lg border-2 border-white flex flex-shrink-0 items-center justify-center shadow-lg transition-all duration-300 ${BG_COLORS[card.color]} ${playable ? 'cursor-pointer hover:-translate-y-4 hover:shadow-2xl opacity-100 z-10' : 'opacity-100'} animate-deal`}
                 >
                     <div className={`absolute w-3/4 h-3/4 bg-white rounded-full flex items-center justify-center shadow-inner ${isWild ? '' : 'transform -rotate-12'}`}>
                         <span className={`text-xl sm:text-3xl md:text-4xl font-black ${TEXT_COLORS[card.color]} drop-shadow-sm ${isWild ? '' : 'transform rotate-12'} text-center leading-none`}>
@@ -178,7 +181,7 @@
                 message: 'Welcome to Uno!',
                 globalScores: [0, 0, 0, 0],
                 roundWinner: null,
-                roundPoints: 0
+                roundScores: [0, 0, 0, 0]
             });
 
             // Start or Restart Game
@@ -215,7 +218,7 @@
                     message: "Game Start! Your Turn.",
                     globalScores: keepScores ? prev.globalScores : [0, 0, 0, 0],
                     roundWinner: null,
-                    roundPoints: 0
+                    roundScores: [0, 0, 0, 0]
                 }));
             };
 
@@ -290,31 +293,22 @@
                         newState.phase = 'GAME_OVER';
                         newState.roundWinner = playerIdx;
                         
-                        // Calculate Points
-                        let pointsGained = 0;
+                        // Calculate Penalty Points (Golf style: Lowest score wins)
+                        let newRoundScores = [0, 0, 0, 0];
                         newState.hands.forEach((hand, i) => {
-                            if (newState.isTeamMode) {
-                                // If teams, take points from opponents (not teammate)
-                                const isTeammate = (i === (playerIdx + 2) % 4) || (i === playerIdx);
-                                if (!isTeammate) {
-                                    hand.forEach(c => pointsGained += getCardScore(c));
-                                }
-                            } else {
-                                // Solo: Take points from everyone else
-                                if (i !== playerIdx) {
-                                    hand.forEach(c => pointsGained += getCardScore(c));
-                                }
-                            }
+                            let pts = 0;
+                            hand.forEach(c => pts += getCardScore(c));
+                            newRoundScores[i] = pts;
+                            newState.globalScores[i] += pts;
                         });
 
-                        newState.roundPoints = pointsGained;
-                        newState.globalScores[playerIdx] += pointsGained;
+                        newState.roundScores = newRoundScores;
                         
                         if (newState.isTeamMode) {
                             const teamName = (playerIdx === 0 || playerIdx === 2) ? 'Team 1 (You & Top)' : 'Team 2 (Left & Right)';
-                            newState.message = `🏆 ${teamName} WINS THE ROUND!`;
+                            newState.message = `🏆 ${teamName} WENT OUT!`;
                         } else {
-                            newState.message = `🏆 Player ${playerIdx + 1} WINS THE ROUND!`;
+                            newState.message = `🏆 Player ${playerIdx + 1} WENT OUT!`;
                         }
                         return newState;
                     }
@@ -456,7 +450,7 @@
                         </div>
                         
                         <p className="text-sm text-center max-w-xs text-white/60">
-                            {menuSettings.mode === 'EXTREME' ? "Extreme includes 'Wild Pass Hands' & 'Target Draw 4'" : "Classic Uno Rules. 500 Points to Win."}
+                            {menuSettings.mode === 'EXTREME' ? "Extreme includes 'Wild Pass Hands' & 'Target Draw 4'." : "Penalty Scoring: Lowest Score Wins! Points are added for cards left in hand."}
                         </p>
                     </div>
                 );
@@ -470,7 +464,14 @@
                     {/* Top Player (Player 2) */}
                     <div className="flex justify-center items-start h-[20%] pt-2 relative z-10">
                         <div className="flex space-x-[-1.5rem] sm:space-x-[-2rem] scale-75 sm:scale-90 opacity-90">
-                            {gameState.hands[2].map((c, i) => <Card key={i} card={c} hidden={true} />)}
+                            {gameState.hands[2].map((c, i) => (
+                                <Card 
+                                    key={i} 
+                                    card={c} 
+                                    hidden={!gameState.isTeamMode} // Visible in Team Mode!
+                                    playable={false} 
+                                />
+                            ))}
                         </div>
                         <div className={`absolute top-2 left-4 text-xs font-bold px-3 py-1 rounded-full border ${gameState.turn === 2 ? 'bg-yellow-400 text-black shadow-[0_0_15px_rgba(250,204,21,1)] border-yellow-300' : 'bg-black/40 text-white/50 border-white/10'}`}>
                             {getPlayerLabel(2)} - {gameState.hands[2].length}
@@ -613,33 +614,42 @@
                         <div className="absolute inset-0 bg-black/95 flex flex-col items-center justify-center z-50 p-4 overflow-y-auto">
                             <div className="w-full max-w-md bg-zinc-900 border border-white/20 rounded-3xl p-6 shadow-2xl mt-8">
                                 <h1 className="text-3xl font-black text-yellow-400 drop-shadow-md text-center mb-2">ROUND OVER</h1>
-                                <p className="text-center text-white/80 font-bold mb-6">{gameState.message} (+{gameState.roundPoints} Pts)</p>
+                                <p className="text-center text-white/80 font-bold mb-6">{gameState.message}</p>
                                 
                                 <div className="bg-black/50 rounded-xl p-4 mb-8">
-                                    <h2 className="text-xl font-bold mb-4 border-b border-white/10 pb-2 text-center text-emerald-400">Match Leaderboard</h2>
+                                    <h2 className="text-xl font-bold mb-4 border-b border-white/10 pb-2 text-center text-emerald-400">Match Leaderboard (Lowest Wins)</h2>
                                     
                                     {gameState.isTeamMode ? (
                                         <div className="space-y-4">
-                                            <div className="flex justify-between items-center p-3 rounded bg-zinc-800 border border-white/5">
-                                                <span className="font-bold">Team 1 (You & Top)</span>
-                                                <span className="text-2xl font-black text-yellow-400">{gameState.globalScores[0] + gameState.globalScores[2]}</span>
+                                            <div className={`flex flex-col p-3 rounded border ${(gameState.globalScores[0] + gameState.globalScores[2]) <= (gameState.globalScores[1] + gameState.globalScores[3]) ? 'bg-emerald-900/40 border-emerald-500/30' : 'bg-zinc-800 border-white/5'}`}>
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <span className="font-bold">Team 1 (You & Top)</span>
+                                                    <span className="text-2xl font-black text-yellow-400">{gameState.globalScores[0] + gameState.globalScores[2]} pts</span>
+                                                </div>
+                                                <span className="text-xs text-red-400 text-right">+ {gameState.roundScores[0] + gameState.roundScores[2]} penalty</span>
                                             </div>
-                                            <div className="flex justify-between items-center p-3 rounded bg-zinc-800 border border-white/5">
-                                                <span className="font-bold">Team 2 (Left & Right)</span>
-                                                <span className="text-2xl font-black text-yellow-400">{gameState.globalScores[1] + gameState.globalScores[3]}</span>
+                                            <div className={`flex flex-col p-3 rounded border ${(gameState.globalScores[1] + gameState.globalScores[3]) <= (gameState.globalScores[0] + gameState.globalScores[2]) ? 'bg-emerald-900/40 border-emerald-500/30' : 'bg-zinc-800 border-white/5'}`}>
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <span className="font-bold">Team 2 (Left & Right)</span>
+                                                    <span className="text-2xl font-black text-yellow-400">{gameState.globalScores[1] + gameState.globalScores[3]} pts</span>
+                                                </div>
+                                                <span className="text-xs text-red-400 text-right">+ {gameState.roundScores[1] + gameState.roundScores[3]} penalty</span>
                                             </div>
                                         </div>
                                     ) : (
                                         <div className="space-y-2">
                                             {[0, 1, 2, 3]
-                                                .sort((a, b) => gameState.globalScores[b] - gameState.globalScores[a])
+                                                .sort((a, b) => gameState.globalScores[a] - gameState.globalScores[b])
                                                 .map((p, idx) => (
-                                                <div key={p} className={`flex justify-between items-center p-3 rounded border ${p === 0 ? 'bg-emerald-900/40 border-emerald-500/30' : 'bg-zinc-800 border-white/5'}`}>
+                                                <div key={p} className={`flex justify-between items-center p-3 rounded border ${idx === 0 ? 'bg-emerald-900/40 border-emerald-500/30' : 'bg-zinc-800 border-white/5'}`}>
                                                     <span className="font-bold flex items-center space-x-2">
                                                         <span className="text-white/50 w-4">{idx + 1}.</span> 
                                                         <span>{getPlayerLabel(p)}</span>
                                                     </span>
-                                                    <span className="text-xl font-black text-yellow-400">{gameState.globalScores[p]}</span>
+                                                    <div className="flex flex-col items-end">
+                                                        <span className="text-xl font-black text-yellow-400">{gameState.globalScores[p]} pts</span>
+                                                        {gameState.roundScores[p] > 0 && <span className="text-[10px] text-red-400">+{gameState.roundScores[p]} penalty</span>}
+                                                    </div>
                                                 </div>
                                             ))}
                                         </div>
